@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-apps-web
+  namespace: argocd
+spec:
+  destination:
+    namespace: web-app
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argo-app-manifests 
+    repoURL: https://github.com/pluhin/argo-flux-32-25.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated:
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
