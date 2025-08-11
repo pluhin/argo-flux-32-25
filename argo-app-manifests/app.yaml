@@ -153,7 +153,6 @@ metadata:
   labels:
     run: simple-web-service
 spec:
-  #type: LoadBalancer
   ports:
   - port: 80
     protocol: TCP
