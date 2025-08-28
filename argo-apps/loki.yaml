@@ -1,0 +1,138 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    targetRevision: ">0.0.0"
+    helm:
+      valuesObject:
+        deploymentMode: SingleBinary
+        backend: { replicas: 0 }
+        read:    { replicas: 0 }
+        write:   { replicas: 0 }
+
+        loki:
+          auth_enabled: false
+          server:
+            http_listen_port: 3100
+          commonConfig:
+            replication_factor: 1
+          # 👇 ВАЖНО: отключаем structured metadata при boltdb-shipper
+          limits_config:
+            allow_structured_metadata: false
+          schemaConfig:
+            configs:
+              - from: 2020-10-24
+                store: boltdb-shipper
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: index_
+                  period: 24h
+          storage:
+            type: filesystem
+
+        singleBinary:
+          replicas: 1
+          persistence:
+            enabled: false  # emptyDir
+
+        service:
+          type: ClusterIP
+          port: 3100
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: promtail
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: promtail
+    targetRevision: ">0.0.0"
+    helm:
+      valuesObject:
+        fullnameOverride: promtail
+        daemonset:
+          enabled: true
+        config:
+          server:
+            http_listen_port: 9080
+            grpc_listen_port: 0
+          clients:
+            - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+          positions:
+            filename: /run/promtail/positions.yaml  # стандартный путь; том 'run' создаёт сам чарt
+          scrapeConfigs:
+            - job_name: kubernetes-pods
+              kubernetes_sd_configs:
+                - role: pod
+              pipeline_stages:
+                - cri: {}
+              relabel_configs:
+                - action: replace
+                  source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - action: replace
+                  source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+                - action: replace
+                  source_labels: [__meta_kubernetes_pod_container_name]
+                  target_label: container
+                - action: replace
+                  replacement: /var/log/containers/*$1*.log
+                  target_label: __path__
+                  source_labels: [__meta_kubernetes_pod_name]
+        # Оставляем только varlog, run — убран
+        extraVolumes:
+          - name: varlog
+            hostPath:
+              path: /var/log
+        extraVolumeMounts:
+          - name: varlog
+            mountPath: /var/log
+            readOnly: true
+        rbac:
+          pspEnabled: false
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
